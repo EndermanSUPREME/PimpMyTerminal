@@ -3,6 +3,7 @@
 namespace WinTerminal;
 
 using System;
+using System.Timers;
 using System.Drawing;
 using System.Text.Json;
 using System.Windows.Forms;
@@ -24,6 +25,10 @@ public class FormComps: Form
 
     private PictureBox imagePreview;
     private float sourceImageAlpha = 1f;
+
+    private CheckBox toggleCheckBox;
+    bool SlideShowMode = false;
+    private System.Timers.Timer slideShowTimer;
 
     // Takes the forms controls to know where to add components to
     public void InitializeFormComponents(Control.ControlCollection formControls)
@@ -94,6 +99,20 @@ public class FormComps: Form
             Location = new Point(50, 400),
             AutoSize = true
         };
+
+        // Initialize the checkbox
+        toggleCheckBox = new CheckBox
+        {
+            Text = "Enable Function",
+            Location = new System.Drawing.Point(20, 200),
+            Checked = false // Initially unchecked
+        };
+
+        // Subscribe to the CheckedChanged event
+        toggleCheckBox.CheckedChanged += TogglePresentation;
+
+        // Add the checkbox to the form
+        FormControls.Add(toggleCheckBox);
     }
 
     private void AddComponentsToForm()
@@ -167,6 +186,24 @@ public class FormComps: Form
             imagePreview.Image = AdjustImageOpacity(originalImage, sourceImageAlpha);
         }
     }
+    private void GetRandImage()
+    {
+        if (!System.IO.Directory.Exists(sourceFolder)) return;
+
+        var rand = new Random();
+        string[] imageFileTypes = { ".png", ".jpg", ".jpeg" };
+
+        // Enum Files works well for large collection of images
+        var files = Directory.EnumerateFiles(sourceFolder).Where(file => imageFileTypes.Contains(Path.GetExtension(file).ToLower())).ToList();
+
+        sourceImage = files[rand.Next(files.Count)];
+        imageLabel.Text = "Terminal Background Image: " + sourceImage;
+
+        using (Image originalImage = Image.FromFile(sourceImage))
+        {
+            imagePreview.Image = AdjustImageOpacity(originalImage, sourceImageAlpha);
+        }
+    }
 
     private void SelectFolderButton_Click(object sender, EventArgs e)
     {
@@ -178,12 +215,11 @@ public class FormComps: Form
             {
                 sourceFolder = folderDialog.SelectedPath;
                 folderLabel.Text = "Terminal Background Images Folder: " + sourceFolder;
-                // MessageBox.Show($"Selected folder: {folderDialog.SelectedPath}");
             }
         }
     }
 
-    private void ApplyTerminal_Click(object sender, EventArgs e)
+    private string FindMicrosoftTerminalPath()
     {
         // Get the AppData\Local path
         string LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
@@ -191,13 +227,57 @@ public class FormComps: Form
         // Build the full path to the settings.json
         string WindowsTerminalSettingsFile = Path.Combine(LocalAppData, @"Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json");
 
+        return WindowsTerminalSettingsFile;
+    }
+
+    private void ApplyTerminal_Click(object sender, EventArgs e)
+    {
         // Check for Windows Terminal settings.json
-        if (System.IO.File.Exists(WindowsTerminalSettingsFile))
+        if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
         {
-            ModifyTerminalSettings(WindowsTerminalSettingsFile);
+            ModifyTerminalSettings(FindMicrosoftTerminalPath());
         } else
             {
                 ShowInformationBox();
+            }
+    }
+
+    private List<string> GetProfiles()
+    {
+        // Check for Windows Terminal settings.json
+        if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
+        {
+            try
+            {
+                List<string> Profiles = new List<string>();
+
+                // Read JSON
+                string jsonText = File.ReadAllText(FindMicrosoftTerminalPath());
+                JsonNode json = JsonNode.Parse(jsonText);
+
+                // Get the profiles list
+                JsonArray profiles = json["profiles"]?["list"]?.AsArray();
+                if (profiles == null)
+                {
+                    Console.WriteLine("Profiles section not found.");
+                    return new List<string>();
+                }
+
+                foreach (JsonNode profile in profiles)
+                {
+                    Profiles.Add(profile?["name"]?.ToString());
+                }
+                
+                return Profiles;
+            } catch (System.Exception)
+                {
+                    MessageBox.Show("An error occurred reading settings!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    return new List<string>();
+                }
+        } else
+            {
+                ShowInformationBox();
+                return new List<string>();
             }
     }
 
@@ -230,8 +310,6 @@ public class FormComps: Form
             // Write back to file
             var options = new JsonSerializerOptions { WriteIndented = true };
             File.WriteAllText(settingsFile, json.ToJsonString(options));
-
-            MessageBox.Show("New Settings Applied Successfully!");
         } catch (System.Exception)
             {
                 MessageBox.Show("An error occurred when applying new settings!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
@@ -278,4 +356,46 @@ public class FormComps: Form
         }
     }
 
+    // Event handler for when the checkbox is checked or unchecked
+    private void TogglePresentation(object sender, EventArgs e)
+    {
+        if (toggleCheckBox.Checked)
+        {
+            // executes once
+            SlideShowMode = true;
+
+            if (imagePreview.Image == null) return;
+            if (!SlideShowMode) return;
+
+            // Set up the Timer to call the MyPeriodicFunction every 2 seconds (2000 milliseconds)
+            slideShowTimer = new System.Timers.Timer(2000); // 2000 ms = 2 seconds
+            slideShowTimer.Elapsed += ChangeImage; // Event handler to execute on each interval
+            slideShowTimer.AutoReset = true; // Keep executing every 2 seconds
+            slideShowTimer.Enabled = true; // Enable the timer
+        } else
+            {
+                // executes once
+                SlideShowMode = false;
+                slideShowTimer.Enabled = false; // disable the timer
+            }
+    }
+
+    private void ChangeImage(object sender, EventArgs e)
+    {
+        if (!System.IO.Directory.Exists(sourceFolder)) return;
+
+        GetRandImage();
+
+        // Check for Windows Terminal settings.json
+        if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
+        {
+            ModifyTerminalSettings(FindMicrosoftTerminalPath());
+        } else
+            {
+                ShowInformationBox();
+                if (toggleCheckBox != null) toggleCheckBox.Checked = false;
+                SlideShowMode = false;
+                slideShowTimer.Enabled = false;
+            }
+    }
 }
