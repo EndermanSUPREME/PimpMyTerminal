@@ -17,18 +17,27 @@ public class FormComps: Form
     private string sourceFolder = "";
     private Label folderLabel;
 
-    private string sourceImage = "";
+    private string oldSourceImage = "", sourceImage = "";
     private Label imageLabel;
 
     private TrackBar alphaSlider;
     private Label alphaLabel;
 
     private PictureBox imagePreview;
+    private Image oldImg, newImg;
     private float sourceImageAlpha = 1f;
+    private float fadeAlpha = 1f;
+    private int fadeStatus = 0;
+    private float fadeSpeed = 0.1f;
+    bool isTransitioning = false;
 
     private CheckBox toggleCheckBox;
     bool SlideShowMode = false;
-    private System.Timers.Timer slideShowTimer;
+    private System.Timers.Timer slideShowTimer, fadeTimer;
+    private float changeTime = 0f;
+
+    private NumericUpDown numMinutes;
+    private NumericUpDown numSeconds;
 
     // Takes the forms controls to know where to add components to
     public void InitializeFormComponents(Control.ControlCollection formControls)
@@ -43,12 +52,13 @@ public class FormComps: Form
 
         CreateFormComponents();
         AddComponentsToForm();
+        SetSlideShowTimer(); // Sets Default Timer
     }
 
     private void CreateFormComponents() 
     {
         CreateNewButton("Set Source Folder", SelectFolderButton_Click, 0, 0);
-        CreateNewButton("Get Random Image", GetRandImage, 0, 50);
+        CreateNewButton("Get Random Image", GetRandImage_Click, 0, 50);
 
         alphaLabel = new Label
         {
@@ -113,6 +123,46 @@ public class FormComps: Form
 
         // Add the checkbox to the form
         FormControls.Add(toggleCheckBox);
+
+        // Add Controls for slide show functionality
+        Label TimerMinutesLabel = new Label
+        {
+            Text = "Set Timer (minutes):",
+            Location = new System.Drawing.Point(600, 0),
+            AutoSize = true
+        };
+        numMinutes = new NumericUpDown()
+        {
+            Minimum = 0,
+            Maximum = 10,
+            Value = 1,
+            Location = new System.Drawing.Point(600, 25),
+            Width = 60
+        };
+
+        Label TimerSecondsLabel = new Label
+        {
+            Text = "Set Timer (seconds):",
+            Location = new System.Drawing.Point(600, 60),
+            AutoSize = true
+        };
+        numSeconds = new NumericUpDown()
+        {
+            Minimum = 0,
+            Maximum = 60,
+            Value = 0,
+            Location = new System.Drawing.Point(600, 85),
+            Width = 60
+        };
+
+        // Ensures both NumericUpDown components are defined before being accessed
+        numMinutes.ValueChanged += SetSlideShowTimer;
+        numSeconds.ValueChanged += SetSlideShowTimer;
+
+        FormControls.Add(TimerSecondsLabel);
+        FormControls.Add(numSeconds);
+        FormControls.Add(TimerMinutesLabel);
+        FormControls.Add(numMinutes);
     }
 
     private void AddComponentsToForm()
@@ -125,6 +175,97 @@ public class FormComps: Form
 
 //=====================================================================================
 //=====================================================================================
+// Form Component Target Functions
+
+    // Uses the TrackBar to adjust the transparency of the source image
+    private void Alpha_Scroll(object sender, EventArgs e)
+    {
+        sourceImageAlpha = alphaSlider.Value / 100f; // Scale 0-100 to 0-1
+        alphaLabel.Text = $"Transparency: {sourceImageAlpha:F2}";
+
+        // ensure the image file exists
+        if (System.IO.File.Exists(sourceImage))
+        {
+            // Dont apply anything while in transition mode
+            if (isTransitioning) return;
+
+            // redraw the image on the preview section when alpha is change
+            using (Image originalImage = Image.FromFile(sourceImage))
+            {
+                imagePreview.Image = AdjustImageOpacity(originalImage, sourceImageAlpha);
+            }
+        }
+    }
+
+    private void SelectFolderButton_Click(object sender, EventArgs e)
+    {
+        using (FolderBrowserDialog folderDialog = new FolderBrowserDialog())
+        {
+            folderDialog.Description = "Select a folder";
+
+            if (folderDialog.ShowDialog() == DialogResult.OK)
+            {
+                sourceFolder = folderDialog.SelectedPath;
+                folderLabel.Text = "Terminal Background Images Folder: " + sourceFolder;
+            }
+        }
+    }
+
+    private void ApplyTerminal_Click(object sender, EventArgs e)
+    {
+        // Check for Windows Terminal settings.json
+        if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
+        {
+            ModifyTerminalSettings(FindMicrosoftTerminalPath());
+        } else
+            {
+                ShowInformationBox();
+            }
+    }
+
+    // With a source folder pull a random image from it
+    private void GetRandImage_Click(object sender, EventArgs e)
+    {
+        // we dont want to switch images while transitioning
+        if (!isTransitioning) GetRandImage_Click();
+    }
+    private void GetRandImage_Click()
+    {
+        if (!System.IO.Directory.Exists(sourceFolder)) return;
+
+        var rand = new Random();
+        string[] imageFileTypes = { ".png", ".jpg", ".jpeg" };
+
+        // Enum Files works well for large collection of images
+        var files = Directory.EnumerateFiles(sourceFolder).Where(file => imageFileTypes.Contains(Path.GetExtension(file).ToLower())).ToList();
+
+        // store the old image
+        oldImg = newImg;
+        oldSourceImage = sourceImage;
+
+        sourceImage = files[rand.Next(files.Count)];
+        imageLabel.Text = "Terminal Background Image: " + sourceImage;
+
+        // store reference to the desired background image
+        newImg = Image.FromFile(sourceImage);
+
+        StartFade();
+    }
+
+//=====================================================================================
+//=====================================================================================
+// Form Component Helper Functions
+
+    private string FindMicrosoftTerminalPath()
+    {
+        // Get the AppData\Local path
+        string LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        
+        // Build the full path to the settings.json
+        string WindowsTerminalSettingsFile = Path.Combine(LocalAppData, @"Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json");
+
+        return WindowsTerminalSettingsFile;
+    }
 
     // Create Buttons with give button text and On-Click function target
     private void CreateNewButton(string ButtonText, EventHandler ClickTarget, int PosX = 0, int PosY = 0)
@@ -147,7 +288,7 @@ public class FormComps: Form
         }
     }
 
-    // Function to adjust image transparency
+    // Adjust Desired Image Alpha with a desired Alpha Value
     private Bitmap AdjustImageOpacity(Image image, float opacity)
     {
         Bitmap bmp = new Bitmap(image.Width, image.Height);
@@ -167,81 +308,7 @@ public class FormComps: Form
         return bmp;
     }
 
-    // With a source folder pull a random image from it
-    private void GetRandImage(object sender, EventArgs e)
-    {
-        if (!System.IO.Directory.Exists(sourceFolder)) return;
-
-        var rand = new Random();
-        string[] imageFileTypes = { ".png", ".jpg", ".jpeg" };
-
-        // Enum Files works well for large collection of images
-        var files = Directory.EnumerateFiles(sourceFolder).Where(file => imageFileTypes.Contains(Path.GetExtension(file).ToLower())).ToList();
-
-        sourceImage = files[rand.Next(files.Count)];
-        imageLabel.Text = "Terminal Background Image: " + sourceImage;
-
-        using (Image originalImage = Image.FromFile(sourceImage))
-        {
-            imagePreview.Image = AdjustImageOpacity(originalImage, sourceImageAlpha);
-        }
-    }
-    private void GetRandImage()
-    {
-        if (!System.IO.Directory.Exists(sourceFolder)) return;
-
-        var rand = new Random();
-        string[] imageFileTypes = { ".png", ".jpg", ".jpeg" };
-
-        // Enum Files works well for large collection of images
-        var files = Directory.EnumerateFiles(sourceFolder).Where(file => imageFileTypes.Contains(Path.GetExtension(file).ToLower())).ToList();
-
-        sourceImage = files[rand.Next(files.Count)];
-        imageLabel.Text = "Terminal Background Image: " + sourceImage;
-
-        using (Image originalImage = Image.FromFile(sourceImage))
-        {
-            imagePreview.Image = AdjustImageOpacity(originalImage, sourceImageAlpha);
-        }
-    }
-
-    private void SelectFolderButton_Click(object sender, EventArgs e)
-    {
-        using (FolderBrowserDialog folderDialog = new FolderBrowserDialog())
-        {
-            folderDialog.Description = "Select a folder";
-
-            if (folderDialog.ShowDialog() == DialogResult.OK)
-            {
-                sourceFolder = folderDialog.SelectedPath;
-                folderLabel.Text = "Terminal Background Images Folder: " + sourceFolder;
-            }
-        }
-    }
-
-    private string FindMicrosoftTerminalPath()
-    {
-        // Get the AppData\Local path
-        string LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
-        
-        // Build the full path to the settings.json
-        string WindowsTerminalSettingsFile = Path.Combine(LocalAppData, @"Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\settings.json");
-
-        return WindowsTerminalSettingsFile;
-    }
-
-    private void ApplyTerminal_Click(object sender, EventArgs e)
-    {
-        // Check for Windows Terminal settings.json
-        if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
-        {
-            ModifyTerminalSettings(FindMicrosoftTerminalPath());
-        } else
-            {
-                ShowInformationBox();
-            }
-    }
-
+/*
     private List<string> GetProfiles()
     {
         // Check for Windows Terminal settings.json
@@ -271,7 +338,7 @@ public class FormComps: Form
                 return Profiles;
             } catch (System.Exception)
                 {
-                    MessageBox.Show("An error occurred reading settings!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                    MessageBox.Show("Error Fetching Profiles!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return new List<string>();
                 }
         } else
@@ -280,6 +347,11 @@ public class FormComps: Form
                 return new List<string>();
             }
     }
+*/
+
+//=========================================================================
+//=========================================================================
+// Edit Microsoft Terminal Settings JSON File
 
     private void ModifyTerminalSettings(string settingsFile)
     {
@@ -312,7 +384,7 @@ public class FormComps: Form
             File.WriteAllText(settingsFile, json.ToJsonString(options));
         } catch (System.Exception)
             {
-                MessageBox.Show("An error occurred when applying new settings!", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MessageBox.Show("Error occured in ModifyTerminalSettings", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
     }
 
@@ -332,29 +404,15 @@ public class FormComps: Form
         {
             // Open Microsoft Store URL
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(storeUrl) { UseShellExecute = true });
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show("Error: " + ex.Message);
-        }
-    }
-
-    // Uses the TrackBar to adjust the transparency of the source image
-    private void Alpha_Scroll(object sender, EventArgs e)
-    {
-        sourceImageAlpha = alphaSlider.Value / 100f; // Scale 0-100 to 0-1
-        alphaLabel.Text = $"Transparency: {sourceImageAlpha:F2}";
-
-        // ensure the image file exists
-        if (System.IO.File.Exists(sourceImage))
-        {
-            // redraw the image on the preview section when alpha is change
-            using (Image originalImage = Image.FromFile(sourceImage))
+        } catch (Exception ex)
             {
-                imagePreview.Image = AdjustImageOpacity(originalImage, sourceImageAlpha);
+                MessageBox.Show("Error: " + ex.Message);
             }
-        }
     }
+    
+//=================================================================================
+//=================================================================================
+// Slide Show Functionality
 
     // Event handler for when the checkbox is checked or unchecked
     private void TogglePresentation(object sender, EventArgs e)
@@ -367,10 +425,10 @@ public class FormComps: Form
             if (imagePreview.Image == null) return;
             if (!SlideShowMode) return;
 
-            // Set up the Timer to call the MyPeriodicFunction every 2 seconds (2000 milliseconds)
-            slideShowTimer = new System.Timers.Timer(2000); // 2000 ms = 2 seconds
-            slideShowTimer.Elapsed += ChangeImage; // Event handler to execute on each interval
-            slideShowTimer.AutoReset = true; // Keep executing every 2 seconds
+            // Timer allows us to run a function periodically every n number of miliseconds
+            slideShowTimer = new System.Timers.Timer(changeTime);
+            slideShowTimer.Elapsed += ChangeImage; // 
+            slideShowTimer.AutoReset = true; // Loop Execution
             slideShowTimer.Enabled = true; // Enable the timer
         } else
             {
@@ -380,22 +438,150 @@ public class FormComps: Form
             }
     }
 
+    // Gets a random image and displays it as the background of the Terminal
     private void ChangeImage(object sender, EventArgs e)
     {
+        if (isTransitioning) return;
         if (!System.IO.Directory.Exists(sourceFolder)) return;
 
-        GetRandImage();
+        GetRandImage_Click();
 
         // Check for Windows Terminal settings.json
         if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
         {
-            ModifyTerminalSettings(FindMicrosoftTerminalPath());
+            // start a timer to create a fade transition of the image
+            StartFade();
         } else
             {
                 ShowInformationBox();
                 if (toggleCheckBox != null) toggleCheckBox.Checked = false;
                 SlideShowMode = false;
                 slideShowTimer.Enabled = false;
+            }
+    }
+
+    // Event handler for when the checkbox is checked or unchecked
+    private void SetSlideShowTimer(object sender, EventArgs e)
+    {
+        SetSlideShowTimer();
+    }
+    private void SetSlideShowTimer()
+    {
+        // 1s = 1000ms
+        float minutes = (float)numMinutes.Value * (1000 * 60);
+        float seconds = (float)numSeconds.Value * 1000;
+        changeTime = minutes + seconds;
+    }
+
+//=================================================================================
+//=================================================================================
+// Image Fade Transition
+
+    private void StartFade()
+    {
+        isTransitioning = true;
+        fadeTimer = new System.Timers.Timer(fadeSpeed);
+        fadeTimer.Elapsed += FadeTransition;
+        fadeTimer.AutoReset = true; // Loop Execution
+        fadeTimer.Enabled = true; // Enable the timer
+    }
+
+    private void FadeTransition(object sender, EventArgs e)
+    {
+        FadeTransition();
+    }
+    private void FadeTransition()
+    {
+        if (fadeStatus == 0) // decrement alpha to 0
+        {
+            if (fadeAlpha > 0)
+            {
+                fadeAlpha -= 0.01f;
+                
+                if (fadeAlpha < 0)
+                {
+                    fadeAlpha = 0;
+                    fadeStatus = 1;
+
+                    ModifyBackgroundAlpha(oldImg, fadeAlpha, oldSourceImage);
+
+                    // ensure the image file exists
+                    if (System.IO.File.Exists(sourceImage))
+                    {
+                        // redraw the new image we selected
+                        imagePreview.Image = AdjustImageOpacity(newImg, sourceImageAlpha);
+                    }
+                } else
+                    {
+                        ModifyBackgroundAlpha(oldImg, fadeAlpha, oldSourceImage);
+                    }
+            }
+        } else if (fadeStatus == 1) // increment alpha to original
+            {
+                if (fadeAlpha < sourceImageAlpha)
+                {
+                    fadeAlpha += 0.01f;
+                    
+                    if (fadeAlpha > sourceImageAlpha)
+                    {
+                        // Set the new image to display
+
+                        fadeAlpha = sourceImageAlpha;
+                        fadeStatus = 2;
+                    }
+                    
+                    ModifyBackgroundAlpha(newImg, fadeAlpha, sourceImage);
+                }
+            } else // reset transition state
+                {
+                    fadeStatus = 0;
+                    fadeAlpha = sourceImageAlpha;
+                    ModifyBackgroundAlpha(newImg, fadeAlpha, sourceImage);
+                    fadeTimer.Enabled = false;
+                    isTransitioning = false;
+                }
+    }
+    
+    // Used during the FadeTransition to adjust the Alpha Value
+    // Adjusts the alpha within Settings JSON file
+    private void ModifyBackgroundAlpha(Image targetImage, float alphaValue, string imagePath)
+    {
+        if (targetImage == null) return;
+
+        imagePreview.Image = AdjustImageOpacity(targetImage, alphaValue);
+
+        try
+        {
+            string settingsFile = FindMicrosoftTerminalPath();
+
+            // Read JSON
+            string jsonText = File.ReadAllText(settingsFile);
+            JsonNode json = JsonNode.Parse(jsonText);
+
+            // Get the profiles list
+            JsonArray profiles = json["profiles"]?["list"]?.AsArray();
+            if (profiles == null)
+            {
+                Console.WriteLine("Profiles section not found.");
+                return;
+            }
+
+            foreach (JsonNode profile in profiles)
+            {
+                if (profile?["name"]?.ToString() == "Windows PowerShell") // Target specific profile
+                {
+                    profile["backgroundImage"] = imagePath;
+                    profile["backgroundImageOpacity"] = alphaValue;
+                    profile["backgroundImageStretchMode"] = "fill";
+                }
+            }
+
+            // Write back to file
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            File.WriteAllText(settingsFile, json.ToJsonString(options));
+        } catch (System.Exception) // if the settings file is being used this catch will trigger
+            {
+                return;
             }
     }
 }
