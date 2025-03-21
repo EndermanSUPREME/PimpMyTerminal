@@ -5,6 +5,7 @@ namespace WinTerminal;
 using System;
 using System.Timers;
 using System.Drawing;
+using System.Threading;
 using System.Text.Json;
 using System.Windows.Forms;
 using System.Text.Json.Nodes;
@@ -28,16 +29,19 @@ public class FormComps: Form
     private float sourceImageAlpha = 1f;
     private float fadeAlpha = 1f;
     private int fadeStatus = 0;
-    private float fadeSpeed = 0.1f;
     bool isTransitioning = false;
 
     private CheckBox toggleCheckBox;
     bool SlideShowMode = false;
-    private System.Timers.Timer slideShowTimer, fadeTimer;
+    private System.Timers.Timer slideShowTimer;
+    private Thread ImageFadeThread;
     private float changeTime = 0f;
 
     private NumericUpDown numMinutes;
     private NumericUpDown numSeconds;
+
+    private ComboBox profileDropDown;
+    private string SelectedTerminalProfile = "";
 
     // Takes the forms controls to know where to add components to
     public void InitializeFormComponents(Control.ControlCollection formControls)
@@ -163,6 +167,35 @@ public class FormComps: Form
         FormControls.Add(numSeconds);
         FormControls.Add(TimerMinutesLabel);
         FormControls.Add(numMinutes);
+
+        // Set properties for the profile select drop-down
+        Label SelectedProfileLabel = new Label
+        {
+            Text = "Selected Profile:",
+            Location = new System.Drawing.Point(570, 150),
+            AutoSize = true
+        };
+        FormControls.Add(SelectedProfileLabel);
+
+        profileDropDown = new ComboBox();
+
+        profileDropDown.Location = new Point(570, 175);
+        profileDropDown.Width = 200;
+
+        // Add items
+        foreach (string profile in GetProfiles())
+        {
+            profileDropDown.Items.Add(profile);
+        }
+
+        // Handle selection event
+        profileDropDown.SelectedIndexChanged += (s, e) =>
+        {
+            SelectedTerminalProfile = profileDropDown.SelectedItem.ToString();
+        };
+
+        // Add to form
+        FormControls.Add(profileDropDown);
     }
 
     private void AddComponentsToForm()
@@ -238,6 +271,8 @@ public class FormComps: Form
 
         // Enum Files works well for large collection of images
         var files = Directory.EnumerateFiles(sourceFolder).Where(file => imageFileTypes.Contains(Path.GetExtension(file).ToLower())).ToList();
+        // remove the current image so when we fetch a random image we dont get the same image
+        if (files.Count() > 1) files.Remove(sourceImage);
 
         // store the old image
         oldImg = newImg;
@@ -308,7 +343,6 @@ public class FormComps: Form
         return bmp;
     }
 
-/*
     private List<string> GetProfiles()
     {
         // Check for Windows Terminal settings.json
@@ -347,7 +381,6 @@ public class FormComps: Form
                 return new List<string>();
             }
     }
-*/
 
 //=========================================================================
 //=========================================================================
@@ -355,6 +388,9 @@ public class FormComps: Form
 
     private void ModifyTerminalSettings(string settingsFile)
     {
+        // need a valid profile selected
+        if (!GetProfiles().Contains(SelectedTerminalProfile)) return;
+
         try
         {
             // Read JSON
@@ -371,7 +407,7 @@ public class FormComps: Form
 
             foreach (JsonNode profile in profiles)
             {
-                if (profile?["name"]?.ToString() == "Windows PowerShell") // Target specific profile
+                if (profile?["name"]?.ToString() == SelectedTerminalProfile) // Target specific profile
                 {
                     profile["backgroundImage"] = sourceImage;
                     profile["backgroundImageOpacity"] = sourceImageAlpha;
@@ -417,25 +453,28 @@ public class FormComps: Form
     // Event handler for when the checkbox is checked or unchecked
     private void TogglePresentation(object sender, EventArgs e)
     {
-        if (toggleCheckBox.Checked)
+        if (toggleCheckBox != null)
         {
-            // executes once
-            SlideShowMode = true;
-
-            if (imagePreview.Image == null) return;
-            if (!SlideShowMode) return;
-
-            // Timer allows us to run a function periodically every n number of miliseconds
-            slideShowTimer = new System.Timers.Timer(changeTime);
-            slideShowTimer.Elapsed += ChangeImage; // 
-            slideShowTimer.AutoReset = true; // Loop Execution
-            slideShowTimer.Enabled = true; // Enable the timer
-        } else
+            if (toggleCheckBox.Checked)
             {
                 // executes once
-                SlideShowMode = false;
-                slideShowTimer.Enabled = false; // disable the timer
-            }
+                SlideShowMode = true;
+
+                if (imagePreview.Image == null) return;
+                if (!SlideShowMode) return;
+
+                // Timer allows us to run a function periodically every n number of miliseconds
+                slideShowTimer = new System.Timers.Timer(changeTime);
+                slideShowTimer.Elapsed += ChangeImage; // 
+                slideShowTimer.AutoReset = true; // Loop Execution
+                slideShowTimer.Enabled = true; // Enable the timer
+            } else
+                {
+                    // executes once
+                    SlideShowMode = false;
+                    if (slideShowTimer != null) slideShowTimer.Enabled = false; // disable the timer
+                }
+        }
     }
 
     // Gets a random image and displays it as the background of the Terminal
@@ -449,14 +488,14 @@ public class FormComps: Form
         // Check for Windows Terminal settings.json
         if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
         {
-            // start a timer to create a fade transition of the image
+            // Potentially start a new thread to handle the Image Fade Transition
             StartFade();
         } else
             {
                 ShowInformationBox();
                 if (toggleCheckBox != null) toggleCheckBox.Checked = false;
                 SlideShowMode = false;
-                slideShowTimer.Enabled = false;
+                if (slideShowTimer != null) slideShowTimer.Enabled = false;
             }
     }
 
@@ -479,73 +518,77 @@ public class FormComps: Form
 
     private void StartFade()
     {
+        if (isTransitioning) return;
+
         isTransitioning = true;
-        fadeTimer = new System.Timers.Timer(fadeSpeed);
-        fadeTimer.Elapsed += FadeTransition;
-        fadeTimer.AutoReset = true; // Loop Execution
-        fadeTimer.Enabled = true; // Enable the timer
+        // Run the FadeTransition in its own thread
+        ImageFadeThread = new Thread(FadeTransition);
+        ImageFadeThread.Start();
     }
 
-    private void FadeTransition(object sender, EventArgs e)
-    {
-        FadeTransition();
-    }
     private void FadeTransition()
     {
-        if (fadeStatus == 0) // decrement alpha to 0
-        {
-            if (fadeAlpha > 0)
+        while (isTransitioning) {
+            if (fadeStatus == 0) // decrement alpha to 0
             {
-                fadeAlpha -= 0.01f;
-                
-                if (fadeAlpha < 0)
+                if (fadeAlpha > 0)
                 {
-                    fadeAlpha = 0;
-                    fadeStatus = 1;
-
-                    ModifyBackgroundAlpha(oldImg, fadeAlpha, oldSourceImage);
-
-                    // ensure the image file exists
-                    if (System.IO.File.Exists(sourceImage))
+                    fadeAlpha -= 0.01f;
+                    
+                    if (fadeAlpha < 0)
                     {
-                        // redraw the new image we selected
-                        imagePreview.Image = AdjustImageOpacity(newImg, sourceImageAlpha);
-                    }
-                } else
-                    {
+                        fadeAlpha = 0;
+                        fadeStatus = 1;
+
                         ModifyBackgroundAlpha(oldImg, fadeAlpha, oldSourceImage);
-                    }
-            }
-        } else if (fadeStatus == 1) // increment alpha to original
-            {
-                if (fadeAlpha < sourceImageAlpha)
-                {
-                    fadeAlpha += 0.01f;
-                    
-                    if (fadeAlpha > sourceImageAlpha)
-                    {
-                        // Set the new image to display
 
-                        fadeAlpha = sourceImageAlpha;
-                        fadeStatus = 2;
-                    }
-                    
-                    ModifyBackgroundAlpha(newImg, fadeAlpha, sourceImage);
+                        // ensure the image file exists
+                        if (System.IO.File.Exists(sourceImage))
+                        {
+                            // redraw the new image we selected
+                            imagePreview.Image = AdjustImageOpacity(newImg, sourceImageAlpha);
+                        }
+                    } else
+                        {
+                            ModifyBackgroundAlpha(oldImg, fadeAlpha, oldSourceImage);
+                        }
                 }
-            } else // reset transition state
+            } else if (fadeStatus == 1) // increment alpha to original
                 {
-                    fadeStatus = 0;
-                    fadeAlpha = sourceImageAlpha;
-                    ModifyBackgroundAlpha(newImg, fadeAlpha, sourceImage);
-                    fadeTimer.Enabled = false;
-                    isTransitioning = false;
-                }
+                    if (fadeAlpha < sourceImageAlpha)
+                    {
+                        fadeAlpha += 0.01f;
+                        
+                        if (fadeAlpha > sourceImageAlpha)
+                        {
+                            // Set the new image to display
+
+                            fadeAlpha = sourceImageAlpha;
+                            fadeStatus = 2;
+                        }
+                        
+                        ModifyBackgroundAlpha(newImg, fadeAlpha, sourceImage);
+                    }
+                } else // reset transition state
+                    {
+                        fadeStatus = 0;
+                        fadeAlpha = sourceImageAlpha;
+                        ModifyBackgroundAlpha(newImg, fadeAlpha, sourceImage);
+                        isTransitioning = false;
+                    }
+        }
+
+        // Thread sleeps for 1 second before being able to execute again
+        Thread.Sleep(1000);
     }
     
     // Used during the FadeTransition to adjust the Alpha Value
     // Adjusts the alpha within Settings JSON file
     private void ModifyBackgroundAlpha(Image targetImage, float alphaValue, string imagePath)
     {
+        // need a valid profile selected
+        if (!GetProfiles().Contains(SelectedTerminalProfile)) return;
+
         if (targetImage == null) return;
 
         imagePreview.Image = AdjustImageOpacity(targetImage, alphaValue);
@@ -568,7 +611,7 @@ public class FormComps: Form
 
             foreach (JsonNode profile in profiles)
             {
-                if (profile?["name"]?.ToString() == "Windows PowerShell") // Target specific profile
+                if (profile?["name"]?.ToString() == SelectedTerminalProfile) // Target specific profile
                 {
                     profile["backgroundImage"] = imagePath;
                     profile["backgroundImageOpacity"] = alphaValue;
