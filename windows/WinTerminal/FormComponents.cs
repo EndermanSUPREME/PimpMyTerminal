@@ -83,6 +83,11 @@ public class FormComps: Form
             SlideShowMain.Join();
         }
 
+        isTransitioning = false;
+
+        // auto save form status on exit
+        SaveFormState();
+
         Application.Exit();
     }
 
