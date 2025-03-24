@@ -12,6 +12,7 @@ by running `dotnet` in powershell.exe or cmd.exe.
 ```powershell
 # Build the C# - WinTerminal Project
 git clone https://github.com/EndermanSUPREME/PimpMyTerminal.git
+cd .\PimpMyTerminal
 cd .\windows\WinTerminal
 dotnet restore .
 dotnet build
