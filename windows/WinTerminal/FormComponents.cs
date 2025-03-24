@@ -29,6 +29,7 @@ class FormData
 public class FormComps: Form
 {
     private Control.ControlCollection FormControls;
+    private bool shuttingDown = false;
 
     private string sourceFolder = "";
     private Label folderLabel;
@@ -66,6 +67,24 @@ public class FormComps: Form
     private string SelectedFontName = "";
 
     private Label SaveStateLabel;
+
+    protected override void OnFormClosing(System.Windows.Forms.FormClosingEventArgs e)
+    {
+        shuttingDown = true;
+
+        // ensure all threads have ended so there is no background process after exit
+        // we want the program to completely exit
+        if (ImageFadeThread != null)
+        {
+            ImageFadeThread.Join();
+        }
+        if (SlideShowMain != null)
+        {
+            SlideShowMain.Join();
+        }
+
+        Application.Exit();
+    }
 
     // Takes the forms controls to know where to add components to
     public void InitializeFormComponents(Control.ControlCollection formControls)
@@ -662,10 +681,12 @@ public class FormComps: Form
         SlideShowMode = true;
         if (imagePreview.Image == null) return;
         if (!SlideShowMode) return;
+        if (shuttingDown) return;
 
         if (SlideShowMain == null || !SlideShowMain.IsAlive)
         {
             SlideShowMain = new Thread(SlideShowThread);
+            SlideShowMain.IsBackground = true;
             SlideShowMain.Start();
         }
     }
@@ -735,18 +756,20 @@ public class FormComps: Form
 
     private void StartFade()
     {
-        if (isTransitioning) return;
+        if (shuttingDown || isTransitioning) return;
 
         isTransitioning = true;
         if (ImageFadeThread == null)
         {
             // Run the FadeTransition in its own thread
             ImageFadeThread = new Thread(FadeTransition);
+            ImageFadeThread.IsBackground = true;
             ImageFadeThread.Start();
         } else if (!ImageFadeThread.IsAlive)
             {
                 // Ensure previous thread finished before making a new one
                 ImageFadeThread = new Thread(FadeTransition);
+                ImageFadeThread.IsBackground = true;
                 ImageFadeThread.Start();
             }
     }

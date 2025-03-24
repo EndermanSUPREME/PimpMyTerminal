@@ -2,15 +2,17 @@ namespace WinTerminal;
 
 static class Program
 {
-    /// <summary>
-    ///  The main entry point for the application.
-    /// </summary>
-    [STAThread]
+    static System.Threading.Mutex singleton = new Mutex(true, "PimpMyWinTerminal:37f2014212a3a860223c952205fe3546c409c0442b381584cc5d891d44656a10");
+
     static void Main()
     {
-        // To customize application configuration such as set high DPI settings or default font,
-        // see https://aka.ms/applicationconfiguration.
+        // usage of mutex ensures we do not run multiple instances of this application
+        if (!singleton.WaitOne(TimeSpan.Zero, true))
+        {
+            return;
+        }
+
         ApplicationConfiguration.Initialize();
         Application.Run(new WinTerminalForm());
-    }    
+    }
 }
