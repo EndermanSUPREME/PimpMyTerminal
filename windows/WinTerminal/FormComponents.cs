@@ -7,9 +7,24 @@ using System.Timers;
 using System.Drawing;
 using System.Threading;
 using System.Text.Json;
+using System.Drawing.Text;
 using System.Windows.Forms;
-using System.Text.Json.Nodes;
 using System.Drawing.Imaging;
+using System.Text.Json.Nodes;
+using System.Text.Json.Serialization;
+
+// Create Custom Class for JSON Serialization
+class FormData
+{
+    public string TargetProfile { get; set; }
+    public float BackgroundAlpha { get; set; }
+    public string SourceDirPath { get; set; }
+    public string SourceImgPath { get; set; }
+    public string TerminalFont { get; set; }
+    public bool SlideShowMode { get; set; }
+    public int Minutes { get; set; }
+    public int Seconds { get; set; }
+}
 
 public class FormComps: Form
 {
@@ -31,10 +46,14 @@ public class FormComps: Form
     private int fadeStatus = 0;
     bool isTransitioning = false;
 
-    private CheckBox toggleCheckBox;
+    private CheckBox slideShowToggle;
     bool SlideShowMode = false;
-    private System.Timers.Timer slideShowTimer;
+    
+    private CheckBox filterFontToggle;
+    bool filterFonts = false;
+
     private Thread ImageFadeThread;
+    Thread SlideShowMain;
     private float changeTime = 0f;
 
     private NumericUpDown numMinutes;
@@ -42,6 +61,11 @@ public class FormComps: Form
 
     private ComboBox profileDropDown;
     private string SelectedTerminalProfile = "";
+
+    private ComboBox fontDropDown;
+    private string SelectedFontName = "";
+
+    private Label SaveStateLabel;
 
     // Takes the forms controls to know where to add components to
     public void InitializeFormComponents(Control.ControlCollection formControls)
@@ -57,6 +81,7 @@ public class FormComps: Form
         CreateFormComponents();
         AddComponentsToForm();
         SetSlideShowTimer(); // Sets Default Timer
+        LoadFormState(); // Attempts to locate local config settings to import saved state
     }
 
     private void CreateFormComponents() 
@@ -114,19 +139,7 @@ public class FormComps: Form
             AutoSize = true
         };
 
-        // Initialize the checkbox
-        toggleCheckBox = new CheckBox
-        {
-            Text = "Enable Function",
-            Location = new System.Drawing.Point(20, 200),
-            Checked = false // Initially unchecked
-        };
-
-        // Subscribe to the CheckedChanged event
-        toggleCheckBox.CheckedChanged += TogglePresentation;
-
-        // Add the checkbox to the form
-        FormControls.Add(toggleCheckBox);
+        CreateToggle(ref slideShowToggle, "Enable Slide-Show", TogglePresentation, 20, 200);
 
         // Add Controls for slide show functionality
         Label TimerMinutesLabel = new Label
@@ -196,7 +209,55 @@ public class FormComps: Form
 
         // Add to form
         FormControls.Add(profileDropDown);
-    }
+
+        SaveStateLabel = new Label
+        {
+            Text = "",
+            Location = new Point(20, 230),
+            AutoSize = true
+        };
+        FormControls.Add(SaveStateLabel);
+        CreateNewButton("Save State", SaveFormState_Click, 20, 275);
+        CreateNewButton("Load State", LoadFormState_Click, 20, 320);
+
+        // Create Dropdown for selecting desired font for terminal
+        CreateToggle(ref filterFontToggle, "Filter For Mono Fonts", FilterFonts, 570, 225);
+
+        // Set properties for the font select drop-down
+        Label SelectedFontLabel = new Label
+        {
+            Text = "Selected Font:",
+            Location = new System.Drawing.Point(570, 255),
+            AutoSize = true
+        };
+        FormControls.Add(SelectedFontLabel);
+
+        fontDropDown = new ComboBox();
+
+        fontDropDown.Location = new Point(570, 285);
+        fontDropDown.Width = 200;
+
+        // Add items to the fontDropDown
+        foreach (string fontName in GetInstalledFonts())
+        {
+            fontDropDown.Items.Add(fontName);
+        }
+
+        // Handle selection event
+        fontDropDown.SelectedIndexChanged += (s, e) =>
+        {
+            // Have a file locking mechanism to ensure all file write operations
+            // are performed successfully, currently some writes get overwriten
+            // before being finalized
+            SelectedFontName = fontDropDown.SelectedItem.ToString();
+            UpdateTerminalFont(SelectedFontName);
+        };
+
+        // Add to form
+        FormControls.Add(fontDropDown);
+
+        CreateNewButton("Can't Find Font?", FontInformation, 570, 315);
+    } // End Of Component Creation Func
 
     private void AddComponentsToForm()
     {
@@ -256,13 +317,25 @@ public class FormComps: Form
             }
     }
 
+    private void FontInformation(object sender, EventArgs e)
+    {
+        MessageBox.Show("If you cannot find the Font you're looking for, you may need to install your font (.ttf, .odt)"+
+        "into your Windows System.\n\nIt is Highly Suggested you use a MONO Font in the Terminal, mono-font ensures all " +
+        "characters are equally spaced apart, non-mono fonts may result in hard to read text.\n\n" +
+        "To ensure the font is found with the mono-filter, ensure the font name includes the word 'mono'",
+        "Font Information", MessageBoxButtons.OK, MessageBoxIcon.Information);
+    }
+
     // With a source folder pull a random image from it
     private void GetRandImage_Click(object sender, EventArgs e)
     {
         // we dont want to switch images while transitioning
-        if (!isTransitioning) GetRandImage_Click();
+        if (!isTransitioning)
+        {
+            GetRandImage();
+        }
     }
-    private void GetRandImage_Click()
+    private void GetRandImage()
     {
         if (!System.IO.Directory.Exists(sourceFolder)) return;
 
@@ -285,6 +358,25 @@ public class FormComps: Form
         newImg = Image.FromFile(sourceImage);
 
         StartFade();
+    }
+
+    private void FilterFonts(object sender, EventArgs e)
+    {
+        FilterFonts();
+    }
+    private void FilterFonts()
+    {
+        if (filterFontToggle == null || fontDropDown == null) return;
+        filterFonts = filterFontToggle.Checked;
+
+        // erase the current items
+        fontDropDown.Items.Clear();
+
+        // Add items to the fontDropDown
+        foreach (string fontName in GetInstalledFonts())
+        {
+            fontDropDown.Items.Add(fontName);
+        }
     }
 
 //=====================================================================================
@@ -321,6 +413,25 @@ public class FormComps: Form
             // Add the button to the form
             FormControls.Add(myButton);
         }
+    }
+
+    // Creates a CheckBox object for a referenced CheckBox variable
+    private void CreateToggle(ref CheckBox toggleComp, string toggleText, EventHandler ToggleTarget, int PosX = 0, int PosY = 0)
+    {
+        // Initialize the checkbox
+        toggleComp = new CheckBox
+        {
+            Text = toggleText,
+            AutoSize = true,
+            Location = new System.Drawing.Point(PosX, PosY),
+            Checked = false // Initially unchecked
+        };
+
+        // execute a function when the toggle is interacted with
+        toggleComp.CheckedChanged += ToggleTarget;
+
+        // Add the checkbox to the form
+        FormControls.Add(toggleComp);
     }
 
     // Adjust Desired Image Alpha with a desired Alpha Value
@@ -380,6 +491,28 @@ public class FormComps: Form
                 ShowInformationBox();
                 return new List<string>();
             }
+    }
+
+    // Returns a list of Font Names that are installed on the device
+    private List<string> GetInstalledFonts()
+    {
+        List<string> fontList = new List<string>();
+    
+        InstalledFontCollection fontsCollection = new InstalledFontCollection();
+        var fonts = fontsCollection.Families.Select(f => f.Name);
+
+        foreach (string font in fonts)
+        {
+            if (filterFonts) {
+                if ( font.ToLower().Contains("mono") )
+                    fontList.Add(font);
+            } else
+                {
+                    fontList.Add(font);
+                }
+        }
+
+        return fontList;
     }
 
 //=========================================================================
@@ -445,6 +578,62 @@ public class FormComps: Form
                 MessageBox.Show("Error: " + ex.Message);
             }
     }
+
+    private void UpdateTerminalFont(string fontName)
+    {
+        // need a valid profile selected
+        if (!GetProfiles().Contains(SelectedTerminalProfile)) return;
+
+        try
+        {
+            string settingsFile = FindMicrosoftTerminalPath();
+
+            // Read JSON
+            string jsonText = File.ReadAllText(settingsFile);
+            JsonNode json = JsonNode.Parse(jsonText);
+
+            // Get the profiles list
+            JsonArray profiles = json["profiles"]?["list"]?.AsArray();
+            if (profiles == null)
+            {
+                Console.WriteLine("Profiles section not found.");
+                return;
+            }
+
+            foreach (JsonNode profile in profiles)
+            {
+                // find the profile that the fonts being assigned to
+                if (profile?["name"]?.ToString() == SelectedTerminalProfile) // Target specific profile
+                {
+                    // ensure the font object is present
+                    if (profile?["font"] != null)
+                    {
+                        // set the font family (face)
+                        profile["font"]["face"] = fontName;
+                    } else
+                        {
+                            // add the font json within the profile json node
+                            JsonObject terminalFontObject = new JsonObject
+                            {
+                                ["face"] = fontName,
+                                ["size"] = 12
+                            };
+
+                            profile["font"] = terminalFontObject;
+                        }
+                    // escape the loop as we found the profile we want to edit
+                    break;
+                }
+            }
+
+            // Write back to file
+            var options = new JsonSerializerOptions { WriteIndented = true };
+            File.WriteAllText(settingsFile, json.ToJsonString(options));
+        } catch (System.Exception)
+            {
+                MessageBox.Show("Error occured in ModifyTerminalSettings", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+    }
     
 //=================================================================================
 //=================================================================================
@@ -453,38 +642,67 @@ public class FormComps: Form
     // Event handler for when the checkbox is checked or unchecked
     private void TogglePresentation(object sender, EventArgs e)
     {
-        if (toggleCheckBox != null)
+        if (slideShowToggle != null)
         {
-            if (toggleCheckBox.Checked)
+            if (slideShowToggle.Checked)
             {
                 // executes once
-                SlideShowMode = true;
-
-                if (imagePreview.Image == null) return;
-                if (!SlideShowMode) return;
-
-                // Timer allows us to run a function periodically every n number of miliseconds
-                slideShowTimer = new System.Timers.Timer(changeTime);
-                slideShowTimer.Elapsed += ChangeImage; // 
-                slideShowTimer.AutoReset = true; // Loop Execution
-                slideShowTimer.Enabled = true; // Enable the timer
+                ReadySlideShow();
             } else
                 {
                     // executes once
                     SlideShowMode = false;
-                    if (slideShowTimer != null) slideShowTimer.Enabled = false; // disable the timer
                 }
+        }
+    }
+
+    // Trigger a piece of logic that can periodically execute
+    private void ReadySlideShow()
+    {
+        SlideShowMode = true;
+        if (imagePreview.Image == null) return;
+        if (!SlideShowMode) return;
+
+        if (SlideShowMain == null || !SlideShowMain.IsAlive)
+        {
+            SlideShowMain = new Thread(SlideShowThread);
+            SlideShowMain.Start();
+        }
+    }
+
+    private void SlideShowThread()
+    {
+        while (true)
+        {
+            // if any important components are not ready do not
+            // Find a new image or start the transition process
+            if (imagePreview.Image == null) continue;
+            if (isTransitioning) continue;
+            if (!SlideShowMode) return;
+
+            // Fetch the new image
+            ChangeImage();
+
+            // Start the Fade Transition
+            TransitionImage();
         }
     }
 
     // Gets a random image and displays it as the background of the Terminal
     private void ChangeImage(object sender, EventArgs e)
     {
+        ChangeImage();
+    }
+    private void ChangeImage()
+    {
         if (isTransitioning) return;
         if (!System.IO.Directory.Exists(sourceFolder)) return;
 
-        GetRandImage_Click();
+        GetRandImage();
+    }
 
+    private void TransitionImage()
+    {
         // Check for Windows Terminal settings.json
         if (System.IO.File.Exists(FindMicrosoftTerminalPath()))
         {
@@ -493,9 +711,8 @@ public class FormComps: Form
         } else
             {
                 ShowInformationBox();
-                if (toggleCheckBox != null) toggleCheckBox.Checked = false;
+                if (slideShowToggle != null) slideShowToggle.Checked = false;
                 SlideShowMode = false;
-                if (slideShowTimer != null) slideShowTimer.Enabled = false;
             }
     }
 
@@ -521,14 +738,22 @@ public class FormComps: Form
         if (isTransitioning) return;
 
         isTransitioning = true;
-        // Run the FadeTransition in its own thread
-        ImageFadeThread = new Thread(FadeTransition);
-        ImageFadeThread.Start();
+        if (ImageFadeThread == null)
+        {
+            // Run the FadeTransition in its own thread
+            ImageFadeThread = new Thread(FadeTransition);
+            ImageFadeThread.Start();
+        } else if (!ImageFadeThread.IsAlive)
+            {
+                // Ensure previous thread finished before making a new one
+                ImageFadeThread = new Thread(FadeTransition);
+                ImageFadeThread.Start();
+            }
     }
 
     private void FadeTransition()
     {
-        while (isTransitioning) {
+        while (true) {
             if (fadeStatus == 0) // decrement alpha to 0
             {
                 if (fadeAlpha > 0)
@@ -574,12 +799,13 @@ public class FormComps: Form
                         fadeStatus = 0;
                         fadeAlpha = sourceImageAlpha;
                         ModifyBackgroundAlpha(newImg, fadeAlpha, sourceImage);
-                        isTransitioning = false;
+                        break;
                     }
         }
 
-        // Thread sleeps for 1 second before being able to execute again
-        Thread.Sleep(1000);
+        // Thread sleeps for desired amount of second before being able to execute again
+        Thread.Sleep((int)changeTime);
+        isTransitioning = false;
     }
     
     // Used during the FadeTransition to adjust the Alpha Value
@@ -627,4 +853,112 @@ public class FormComps: Form
                 return;
             }
     }
-}
+    
+//=================================================================================
+//=================================================================================
+// WinForm Settings Saving and Loading
+
+    private string PimpMyTerminalSettingsPath()
+    {
+        // Get the AppData\Local path
+        string LocalAppData = Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData);
+        
+        // Build the full path to the config file for this application
+        string settingsPath = Path.Combine(LocalAppData, @"Packages\Microsoft.WindowsTerminal_8wekyb3d8bbwe\LocalState\pimpmyterminal.json");
+        return settingsPath;
+    }
+
+    private void SaveFormState_Click(object sender, EventArgs e)
+    {
+        SaveFormState();
+    }
+    private void SaveFormState()
+    {
+        if (SaveStateLabel == null || isTransitioning) return;
+
+        try
+        {
+            // Create an object to serialize
+            var data = new FormData
+            {
+                TargetProfile = SelectedTerminalProfile,
+                BackgroundAlpha = sourceImageAlpha,
+                SourceDirPath = sourceFolder,
+                SourceImgPath = sourceImage,
+                TerminalFont = SelectedFontName,
+                SlideShowMode = SlideShowMode,
+                Minutes = (int)numMinutes.Value,
+                Seconds = (int)numSeconds.Value
+            };
+
+            // Convert object to JSON string
+            string jsonString = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+
+            // Write JSON to a file
+            File.WriteAllText(PimpMyTerminalSettingsPath(), jsonString);
+
+            SaveStateLabel.Text = "State Saved Successfully!";
+        } catch (System.Exception)
+            {
+                SaveStateLabel.Text = "Error Occured when Saving State!";
+            }
+    }
+
+    private void LoadFormState_Click(object sender, EventArgs e)
+    {
+        LoadFormState();
+    }
+    private void LoadFormState()
+    {
+        if (SaveStateLabel == null || isTransitioning) return;
+
+        string settingsFile = PimpMyTerminalSettingsPath();
+        if (System.IO.File.Exists(settingsFile))
+        {
+            try
+            {
+                // Read JSON
+                string jsonText = File.ReadAllText(settingsFile);
+                JsonNode json = JsonNode.Parse(jsonText);
+
+                // Set the local variables related to various GUI options
+                sourceFolder = json["SourceDirPath"].ToString();
+                sourceImage = json["SourceImgPath"].ToString();
+                sourceImageAlpha = (float)json["BackgroundAlpha"];
+                SlideShowMode = (bool)json["SlideShowMode"];
+                SelectedTerminalProfile = json["TargetProfile"].ToString();
+                SelectedFontName = json["SelectedFontName"].ToString();
+
+                // set corresponding GUI
+                if (profileDropDown != null) profileDropDown.SelectedItem = SelectedTerminalProfile;
+                if (alphaSlider != null) alphaSlider.Value = (int)(sourceImageAlpha * 100f);
+                if (folderLabel != null) folderLabel.Text = "Terminal Background Images Folder: " + sourceFolder;
+                if (imageLabel != null) imageLabel.Text = "Terminal Background Image: " + sourceImage;
+                if (numMinutes != null) numMinutes.Value = (int)json["Minutes"];
+                if (numSeconds != null) numSeconds.Value = (int)json["Seconds"];
+                if (imagePreview != null)
+                {
+                    if (System.IO.File.Exists(sourceImage))
+                    {
+                        imagePreview.Image = Image.FromFile(sourceImage);
+                        newImg = Image.FromFile(sourceImage);
+                    }
+                }
+                if (slideShowToggle != null) 
+                {
+                    slideShowToggle.Checked = SlideShowMode;
+                    if (SlideShowMode)
+                    {
+                        ReadySlideShow();
+                    }
+                }
+                if (fontDropDown != null) fontDropDown.SelectedItem = SelectedFontName;
+
+                SaveStateLabel.Text = "State Loaded Successfully!";
+            } catch (System.Exception)
+                {
+                    SaveStateLabel.Text = "Error Occured when\nLoading State!";
+                }
+        }
+    }
+}// EndScript
