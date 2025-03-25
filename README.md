@@ -19,3 +19,15 @@ dotnet build
 # Execute WinTerminal Binary
 .\bin\Debug\net9.0-windows\WinTerminal.exe
 ```
+
+## Basic Usage
+![app-preview](https://github.com/user-attachments/assets/3207f789-6fdd-4834-9a3a-0376fbf09588)
+- Click the `Set Source Folder` button to set a folder pointing to the background image collection you wish to display.
+- Click the `Selectd Profile` drop-down box to set the Profile you wish to apply these settings to, Microsoft Terminal can have many Profiles.
+- Click the `Get Random Image` button to pull an image from your source collection, this image will be set as a background image in your Terminal.
+- Use the `Source Image Alpha` scroll-bar to set the transparancy of the image being displayed.
+- If you wish to have a slide-show background, use the `Set Timer` boxes to set the delay between image changes and click the `Enable Slide-Show` toggle.
+
+This program allows the user to manually load and save their state, but this program will save the state on exit and load it on launch.
+
+The user is also free to change the Font with the `Selected Font` drop-down box that will be displayed on their selected Profile.
