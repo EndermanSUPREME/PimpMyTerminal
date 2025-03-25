@@ -46,6 +46,7 @@ public class FormComps: Form
     private float fadeAlpha = 1f;
     private int fadeStatus = 0;
     bool isTransitioning = false;
+    bool accessingFile = false;
 
     private CheckBox slideShowToggle;
     bool SlideShowMode = false;
@@ -68,7 +69,7 @@ public class FormComps: Form
 
     private Label SaveStateLabel;
 
-    protected override void OnFormClosing(System.Windows.Forms.FormClosingEventArgs e)
+    public void ExitForm(object sender, FormClosedEventArgs e)
     {
         shuttingDown = true;
 
@@ -76,19 +77,20 @@ public class FormComps: Form
         // we want the program to completely exit
         if (ImageFadeThread != null)
         {
-            ImageFadeThread.Join();
+            // prevent program from freezing
+            ImageFadeThread.Join(500);
         }
         if (SlideShowMain != null)
         {
-            SlideShowMain.Join();
+            // prevent program from freezing
+            SlideShowMain.Join(500);
         }
 
         isTransitioning = false;
+        accessingFile = false;
 
         // auto save form status on exit
-        SaveFormState();
-
-        Application.Exit();
+        SaveAtExit();
     }
 
     // Takes the forms controls to know where to add components to
@@ -362,6 +364,7 @@ public class FormComps: Form
     private void GetRandImage()
     {
         if (!System.IO.Directory.Exists(sourceFolder)) return;
+        if (shuttingDown) return;
 
         var rand = new Random();
         string[] imageFileTypes = { ".png", ".jpg", ".jpeg" };
@@ -547,7 +550,7 @@ public class FormComps: Form
     {
         // need a valid profile selected
         if (!GetProfiles().Contains(SelectedTerminalProfile)) return;
-
+        accessingFile = true;
         try
         {
             // Read JSON
@@ -579,6 +582,7 @@ public class FormComps: Form
             {
                 MessageBox.Show("Error occured in ModifyTerminalSettings", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        accessingFile = false;
     }
 
     private void ShowInformationBox()
@@ -607,7 +611,7 @@ public class FormComps: Form
     {
         // need a valid profile selected
         if (!GetProfiles().Contains(SelectedTerminalProfile)) return;
-
+        accessingFile = true;
         try
         {
             string settingsFile = FindMicrosoftTerminalPath();
@@ -657,6 +661,7 @@ public class FormComps: Form
             {
                 MessageBox.Show("Error occured in ModifyTerminalSettings", "Error", MessageBoxButtons.OK, MessageBoxIcon.Error);
             }
+        accessingFile = false;
     }
     
 //=================================================================================
@@ -705,6 +710,7 @@ public class FormComps: Form
             if (imagePreview.Image == null) continue;
             if (isTransitioning) continue;
             if (!SlideShowMode) return;
+            if (shuttingDown) return;
 
             // Fetch the new image
             ChangeImage();
@@ -766,12 +772,14 @@ public class FormComps: Form
         isTransitioning = true;
         if (ImageFadeThread == null)
         {
+            if (shuttingDown) return;
             // Run the FadeTransition in its own thread
             ImageFadeThread = new Thread(FadeTransition);
             ImageFadeThread.IsBackground = true;
             ImageFadeThread.Start();
         } else if (!ImageFadeThread.IsAlive)
             {
+                if (shuttingDown) return;
                 // Ensure previous thread finished before making a new one
                 ImageFadeThread = new Thread(FadeTransition);
                 ImageFadeThread.IsBackground = true;
@@ -847,6 +855,8 @@ public class FormComps: Form
 
         imagePreview.Image = AdjustImageOpacity(targetImage, alphaValue);
 
+        accessingFile = true;
+
         try
         {
             string settingsFile = FindMicrosoftTerminalPath();
@@ -880,6 +890,8 @@ public class FormComps: Form
             {
                 return;
             }
+
+        accessingFile = false;
     }
     
 //=================================================================================
@@ -902,8 +914,8 @@ public class FormComps: Form
     }
     private void SaveFormState()
     {
-        if (SaveStateLabel == null || isTransitioning) return;
-
+        if (SaveStateLabel == null || !accessingFile) return;
+        accessingFile = true;
         try
         {
             // Create an object to serialize
@@ -930,6 +942,43 @@ public class FormComps: Form
             {
                 SaveStateLabel.Text = "Error Occured when Saving State!";
             }
+        accessingFile = false;
+    }
+
+    private void SaveAtExit()
+    {
+        bool savingExitState = true;
+        while (savingExitState) 
+        {
+            try
+            {
+                // Create an object to serialize
+                var data = new FormData
+                {
+                    TargetProfile = SelectedTerminalProfile,
+                    BackgroundAlpha = sourceImageAlpha,
+                    SourceDirPath = sourceFolder,
+                    SourceImgPath = sourceImage,
+                    TerminalFont = SelectedFontName,
+                    SlideShowMode = SlideShowMode,
+                    Minutes = (int)numMinutes.Value,
+                    Seconds = (int)numSeconds.Value
+                };
+
+                // Convert object to JSON string
+                string jsonString = JsonSerializer.Serialize(data, new JsonSerializerOptions { WriteIndented = true });
+
+                // Write JSON to a file
+                File.WriteAllText(PimpMyTerminalSettingsPath(), jsonString);
+
+                SaveStateLabel.Text = "State Saved Successfully!";
+
+                savingExitState = false;
+            } catch (System.Exception)
+                {
+                    SaveStateLabel.Text = "Error Occured when Saving State!";
+                }
+        }
     }
 
     private void LoadFormState_Click(object sender, EventArgs e)
@@ -938,8 +987,6 @@ public class FormComps: Form
     }
     private void LoadFormState()
     {
-        if (SaveStateLabel == null || isTransitioning) return;
-
         string settingsFile = PimpMyTerminalSettingsPath();
         if (System.IO.File.Exists(settingsFile))
         {
@@ -955,7 +1002,7 @@ public class FormComps: Form
                 sourceImageAlpha = (float)json["BackgroundAlpha"];
                 SlideShowMode = (bool)json["SlideShowMode"];
                 SelectedTerminalProfile = json["TargetProfile"].ToString();
-                SelectedFontName = json["SelectedFontName"].ToString();
+                SelectedFontName = json["TerminalFont"].ToString();
 
                 // set corresponding GUI
                 if (profileDropDown != null) profileDropDown.SelectedItem = SelectedTerminalProfile;
@@ -982,8 +1029,8 @@ public class FormComps: Form
                 }
                 if (fontDropDown != null) fontDropDown.SelectedItem = SelectedFontName;
 
-                SaveStateLabel.Text = "State Loaded Successfully!";
-            } catch (System.Exception)
+                if (SaveStateLabel != null) SaveStateLabel.Text = "State Loaded Successfully!";
+            } catch (System.Exception e)
                 {
                     SaveStateLabel.Text = "Error Occured when\nLoading State!";
                 }

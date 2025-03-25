@@ -12,5 +12,6 @@ public partial class WinTerminalForm : Form
     {
         InitializeComponent();
         formComps.InitializeFormComponents(this.Controls);
+        this.FormClosed += formComps.ExitForm;
     }
 }
