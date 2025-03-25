@@ -914,7 +914,8 @@ public class FormComps: Form
     }
     private void SaveFormState()
     {
-        if (SaveStateLabel == null || !accessingFile) return;
+        if (SaveStateLabel == null || accessingFile) return;
+
         accessingFile = true;
         try
         {
@@ -943,6 +944,10 @@ public class FormComps: Form
                 SaveStateLabel.Text = "Error Occured when Saving State!";
             }
         accessingFile = false;
+
+        Thread t = new Thread(ClearStateLabel);
+        t.IsBackground = true;
+        t.Start();
     }
 
     private void SaveAtExit()
@@ -970,13 +975,10 @@ public class FormComps: Form
 
                 // Write JSON to a file
                 File.WriteAllText(PimpMyTerminalSettingsPath(), jsonString);
-
-                SaveStateLabel.Text = "State Saved Successfully!";
-
                 savingExitState = false;
             } catch (System.Exception)
                 {
-                    SaveStateLabel.Text = "Error Occured when Saving State!";
+                    continue;
                 }
         }
     }
@@ -1030,10 +1032,21 @@ public class FormComps: Form
                 if (fontDropDown != null) fontDropDown.SelectedItem = SelectedFontName;
 
                 if (SaveStateLabel != null) SaveStateLabel.Text = "State Loaded Successfully!";
-            } catch (System.Exception e)
+            } catch (System.Exception)
                 {
                     SaveStateLabel.Text = "Error Occured when\nLoading State!";
                 }
         }
+
+        Thread t = new Thread(ClearStateLabel);
+        t.IsBackground = true;
+        t.Start();
+    }
+
+    // sleeps for 5 seconds before clearing text indicating a good/bad save/load
+    private void ClearStateLabel()
+    {
+        Thread.Sleep(5000);
+        if (SaveStateLabel != null) SaveStateLabel.Text = "";
     }
 }// EndScript
